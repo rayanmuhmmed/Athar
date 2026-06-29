@@ -514,21 +514,21 @@ main{ padding:16px 16px 40px; }
       <span class="em-label">حدد وقت الحضور المبكر</span>
       <div class="custom-time-picker">
         <div class="time-col">
-          <button class="time-arrow" onclick="changeHour(1)">
+          <button class="time-arrow" onclick="changeHour(1);event.preventDefault();">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="18 15 12 9 6 15"/></svg>
           </button>
           <span class="time-val" id="hourVal">07</span>
-          <button class="time-arrow" onclick="changeHour(-1)">
+          <button class="time-arrow" onclick="changeHour(-1);event.preventDefault();">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </div>
         <span class="time-sep">:</span>
         <div class="time-col">
-          <button class="time-arrow" onclick="changeMin(1)">
+          <button class="time-arrow" onclick="changeMin(1);event.preventDefault();">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="18 15 12 9 6 15"/></svg>
           </button>
           <span class="time-val" id="minVal">30</span>
-          <button class="time-arrow" onclick="changeMin(-1)">
+          <button class="time-arrow" onclick="changeMin(-1);event.preventDefault();">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </div>
@@ -547,7 +547,7 @@ main{ padding:16px 16px 40px; }
         <button class="early-pt-btn" data-pts="20">20</button>
       </div>
     </div>
-    <button class="early-confirm-btn" id="earlyConfirmBtn">تطبيق على الحاضرين مبكراً</button>
+    <button class="early-confirm-btn" id="earlyConfirmBtn">تفعيل النظام</button>
     <button class="early-cancel-btn" id="earlyLogBtn" onclick="document.getElementById('earlyModal').classList.remove('open');openEarlyLog();" style="margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:8px;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       سجل الحضور المبكر
@@ -899,6 +899,7 @@ function setStatus(studentId, status){
         if(allDates.indexOf(todayKey())===-1) allDates.unshift(todayKey());
         var st = students.find(function(s){ return key(s.id)===key(studentId); });
         showToast(STATUS_NAMES[status]+(st?" — "+st.name:""));
+        if(status === "present") grantEarlyPoints(studentId);
         render();
       });
     }
@@ -1228,6 +1229,7 @@ function to24Hour(h12, period){
 
 // ══ EARLY ATTENDANCE ══
 var earlyPts = 15; // النقاط المختارة
+var earlySystemActive = false; // هل النظام مفعّل؟
 
 // فتح مودال الحضور المبكر
 document.getElementById("earlyAttendanceBtn").onclick = function(){
@@ -1268,50 +1270,38 @@ document.getElementById("earlyModal").onclick = function(e){
   if(e.target === this) this.classList.remove("open");
 };
 
-// تطبيق نقاط الحضور المبكر
+// تفعيل نظام الحضور المبكر — يحفظ الإعدادات ويغلق المودال فقط
 document.getElementById("earlyConfirmBtn").onclick = function(){
-  var timeVal = pad(to24Hour(earlyHour12, earlyPeriod)) + ":" + pad(earlyMin);
-  var btn = document.getElementById("earlyConfirmBtn");
-  btn.disabled = true;
-  btn.textContent = "جاري التطبيق...";
-
-  var today = new Date().toISOString().slice(0,10);
-  var cutoff = today + "T" + timeVal + ":00";
-
-  // جيب الحاضرين اليوم
-  SB.from("attendance_records")
-    .select("student_id,created_at")
-    .eq("date", today).eq("status","present").eq("club_id", currentClubId)
-  .then(function(attRes){
-    if(attRes.error){ showToast("خطأ في جلب البيانات"); btn.disabled=false; btn.textContent="تفعيل نقاط الحضور المبكر"; return; }
-
-    // جيب من أخذ نقاط اليوم
-    SB.from("points").select("student_id").eq("date",today).eq("club_id",currentClubId)
-    .then(function(ptsRes){
-      var alreadyGot = {};
-      (ptsRes.data||[]).forEach(function(p){ alreadyGot[String(p.student_id)]=true; });
-
-      var toInsert = (attRes.data||[])
-        .filter(function(r){ return r.created_at && r.created_at < cutoff && !alreadyGot[String(r.student_id)]; })
-        .map(function(r){ return { student_id:r.student_id, club_id:currentClubId, points:earlyPts, type:"حضور مبكر", reason:"حضور مبكر", date:today }; });
-
-      if(!toInsert.length){
-        showToast("لا يوجد حاضرون مبكرون غير محسوبين");
-        btn.disabled=false; btn.textContent="تفعيل نقاط الحضور المبكر";
-        return;
-      }
-
-      SB.from("points").insert(toInsert).then(function(insRes){
-        btn.disabled=false; btn.textContent="تفعيل نقاط الحضور المبكر";
-        if(insRes.error){ showToast("خطأ في إضافة النقاط"); return; }
-        toInsert.forEach(function(r){ earlyStudentsSet[String(r.student_id)]=true; });
-        render();
-        document.getElementById("earlyModal").classList.remove("open");
-        showToast("تمت إضافة " + earlyPts + " نقطة لـ " + toInsert.length + " عضو");
-      });
-    });
-  });
+  saveEarlySettings();
+  earlySystemActive = true;
+  document.getElementById("earlyModal").classList.remove("open");
+  showToast("✓ تم تفعيل نظام الحضور المبكر");
 };
+
+// منح نقاط حضور مبكر لطالب واحد عند تحضيره
+function grantEarlyPoints(studentId){
+  if(!earlySystemActive || !currentClubId) return;
+  var today = new Date().toISOString().slice(0,10);
+  var cutoff24 = to24Hour(earlyHour12, earlyPeriod);
+  var now = new Date();
+  var nowMinutes = now.getHours() * 60 + now.getMinutes();
+  var cutoffMinutes = cutoff24 * 60 + earlyMin;
+  if(nowMinutes > cutoffMinutes) return; // تجاوز وقت الحضور المبكر
+  if(earlyStudentsSet[String(studentId)]) return; // أخذ النقاط مسبقاً
+  SB.from("points").insert([{
+    student_id: studentId,
+    club_id: currentClubId,
+    points: earlyPts,
+    type: "حضور مبكر",
+    reason: "حضور مبكر",
+    date: today
+  }]).then(function(r){
+    if(r.error) return;
+    earlyStudentsSet[String(studentId)] = true;
+    render();
+    showToast("⭐ " + earlyPts + " نقطة حضور مبكر");
+  });
+}
 
 </script>
 
